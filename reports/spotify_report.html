@@ -1,0 +1,175 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Listening Report</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+    <script src="https://unpkg.com/papaparse@latest/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chrono-node/1.3.11/chrono.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/3.4.1/tailwind.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="root" class="container mx-auto p-4"></div>
+    <script type="text/babel">
+        // Initializing React and Recharts components
+        const { useState, useEffect } = React;
+        const { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer } = Recharts;
+
+        // Formatting large numbers
+        const formatNumber = (num) => {
+            if (num >= 1e6) return (num / 1e6).toFixed(1) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(1) + 'k';
+            return num.toString();
+        };
+
+        // Main Report Component
+        const SpotifyReport = () => {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            // Loading data
+            useEffect(() => {
+                const loadData = async () => {
+                    try {
+                        const jsonData = await loadFileData('/opt/airflow/reports/spotify_report_data.json');
+                        const parsedData = JSON.parse(jsonData);
+                        setData(parsedData);
+                        setLoading(false);
+                    } catch (e) {
+                        console.error('Error loading data:', e);
+                    }
+                };
+                loadData();
+            }, []);
+
+            if (loading) return <div class="text-center text-xl">Loading...</div>;
+
+            // Colors for charts
+            const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
+
+            // Rendering the report
+            return (
+                <div class="bg-white p-6 rounded-lg shadow-lg">
+                    <h1 class="text-3xl font-bold mb-4">Spotify Listening Report</h1>
+                    
+                    {/* Summary Section */}
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-semibold">Summary</h2>
+                        <p>Total Artists: {data.top_artists.length}</p>
+                        <p>Interesting Fact: The most skipped artist is <strong>{data.most_skipped_artist || 'None'}</strong>.</p>
+                    </div>
+
+                    {/* Top Artists Bar Chart */}
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-semibold">Top 5 Artists by Listening Time</h2>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <BarChart data={data.top_artists}>
+                                <XAxis dataKey="artist_name" />
+                                <YAxis tickFormatter={formatNumber} />
+                                <Tooltip formatter={(value) => `${formatNumber(value)} ms`} />
+                                <Legend />
+                                <Bar dataKey="ms_played" fill="#0088FE" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Platform Usage Pie Chart */}
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-semibold">Platform Usage</h2>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <PieChart>
+                                <Pie
+                                    data={data.platform_summary}
+                                    dataKey="ms_played"
+                                    nameKey="platform"
+                                    cx="50%"
+                                    cy="50%"
+                                    outerRadius={100}
+                                    fill="#8884D8"
+                                    label
+                                >
+                                    {data.platform_summary.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                    ))}
+                                </Pie>
+                                <Tooltip formatter={(value) => `${formatNumber(value)} ms`} />
+                                <Legend />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Daily Listening Trends Line Chart */}
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-semibold">Daily Listening Trends</h2>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={data.daily_trends}>
+                                <XAxis dataKey="date" />
+                                <YAxis tickFormatter={formatNumber} />
+                                <Tooltip formatter={(value) => `${formatNumber(value)} ms`} />
+                                <Legend />
+                                <Line type="monotone" dataKey="ms_played" stroke="#FF8042" />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Conclusion */}
+                    <div>
+                        <h2 class="text-2xl font-semibold">Conclusion</h2>
+                        <p>
+                            This report highlights your Spotify listening habits, showcasing your top artists, platform preferences, and daily listening trends. The most skipped artist, {data.most_skipped_artist || 'None'}, suggests a preference shift or possible playlist mismatches. Explore the data further in the PostgreSQL database for deeper insights.
+                        </p>
+                    </div>
+                </div>
+            );
+        };
+
+        // Rendering the report
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<SpotifyReport />);
+    </script>
+</body>
+</html>
